@@ -1,0 +1,10 @@
+submodule example-sub3 {
+  belongs-to example {
+    prefix example;
+  }
+  revision 2023-01-01;
+
+  leaf three {
+    type string;
+  }
+}

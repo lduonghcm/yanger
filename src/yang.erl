@@ -548,29 +548,90 @@ v_unique_namespaces(#yctx{modrevs = ModRevs} = Ctx) ->
           end, {Ctx, []}, ModRevs),
     Ctx1.
 
+check_include_submodule_revision_date([], _SubMName, _SubMRev) ->
+    undefined;
+check_include_submodule_revision_date([{_, {MFileName, _}} | T ] = _MList, SubMName, SubMRev) ->
+    {ok, [{_,_,_,MStmts}], _} = yang_parser:parse(MFileName, _Canonical = false),
+    IncludeModuleList = search_all_stmts('include', MStmts),
+    [IncludeStmt] = [Stmt||{_,Mod,_,Stmt} <- IncludeModuleList, Mod==SubMName],
+    case search_one_stmt('revision-date', IncludeStmt) of
+        {_, SubMRev, _, _} ->
+            MFileName;
+        {_, _, _, _} ->
+            check_include_submodule_revision_date(T, SubMName, SubMRev);
+        false ->
+            check_include_submodule_revision_date(T, SubMName, SubMRev)
+    end.
+
+get_module_from_submodule(Ctx, MName, SubMName, SubMRev) ->
+  MList =
+    [map_lookup({Mod, Rev}, Ctx#yctx.files) || {Mod, Rev} <- gb_trees:keys(Ctx#yctx.files), Mod==MName],
+  if MList =/= [] ->
+        case check_include_submodule_revision_date(MList, SubMName, SubMRev) of
+            undefined ->
+                {_, {FileName, _}} = map_lookup({MName, undefined}, Ctx#yctx.files),
+                FileName;
+            FileName -> FileName
+        end;
+    true -> undefined
+  end.
+
 add_file0(Ctx, FileName, AddCause) ->
     verbose(?V_NORMAL, Ctx, "Read file ~s\n", [FileName]),
     case yang_parser:parse(FileName, Ctx#yctx.canonical) of
-        {ok, Stmts, LLErrors} ->
-            Ctx1 = add_llerrors(LLErrors, Ctx),
-            case parse_file_name(FileName) of
-                {ok, FileModuleName, FileRevision} ->
-                    add_parsed_stmt_tree(Ctx1, Stmts, FileName,
-                                         AddCause,
-                                         FileModuleName, FileRevision,
-                                         _ExpectFailLevel = warning,
-                                         _IncludingModRev = undefined);
-                error ->
-                    add_parsed_stmt_tree(Ctx1, Stmts, FileName,
-                                                 AddCause,
-                                         undefined, undefined,
-                                         _ExpectFailLevel = warning,
-                                         _IncludingModRev = undefined)
+        {ok, [{'submodule', SubMName, _SubPos, SubMStmts}] = Stmts, LLErrors} ->
+            {_, MName, _, _} = search_one_stmt('belongs-to', SubMStmts),
+            case search_one_stmt('revision', SubMStmts) of
+                {_, SubMRev, _, _} ->
+                    ok;
+                false ->
+                  SubMRev = undefined
+            end,
+            MFileName = get_module_from_submodule(Ctx, MName, SubMName, SubMRev ),
+            if MFileName == undefined ->
+              add_file1(Ctx, FileName, AddCause, Stmts, LLErrors);
+              true ->
+                case yang_parser:parse(MFileName, Ctx#yctx.canonical) of
+                    %% If couldn't found the module, continue with compiling the submodule
+                    {error, _}  ->
+                        add_file1(Ctx, FileName, AddCause, Stmts, LLErrors);
+                    %% Otherwise, compile the module instead of submodule
+                    {ok, _, _} ->
+                         case add_file0(Ctx, MFileName , AddCause) of
+                           {true, Ctx01, MainModule} ->
+                             %% Only return the module which yanger is called on
+                             %% get submodule
+                             SubModules = MainModule#module.submodules,
+                             [Test] = [M|| {M, _} <- SubModules, M#module.name==SubMName],
+                              {true, Ctx01, Test};
+                           {false, Ctx01, ModRev} ->
+                              {false, Ctx01, ModRev}
+                         end
+
+
+                end
             end;
+        {ok, Stmts, LLErrors} ->
+            add_file1(Ctx, FileName, AddCause, Stmts, LLErrors);
         {error, LLErrors} ->
             {false, add_llerrors(LLErrors, Ctx), undefined}
     end.
-
+add_file1(Ctx, FileName, AddCause, Stmts, LLErrors) ->
+    Ctx1 = add_llerrors(LLErrors, Ctx),
+    case parse_file_name(FileName) of
+        {ok, FileModuleName, FileRevision} ->
+            add_parsed_stmt_tree(Ctx1, Stmts, FileName,
+                                 AddCause,
+                                 FileModuleName, FileRevision,
+                                 _ExpectFailLevel = warning,
+                                 _IncludingModRev = undefined);
+        error ->
+            add_parsed_stmt_tree(Ctx1, Stmts, FileName,
+                                 AddCause,
+                                 undefined, undefined,
+                                 _ExpectFailLevel = warning,
+                                 _IncludingModRev = undefined)
+    end.
 do_verbose(Lvl, #yctx{verbosity = V}) ->
     Lvl =< V.
 
@@ -823,7 +884,19 @@ parse_header([{Kwd, Arg, _Pos, Substmts} = _H | T] = Stmts, M, Ctx) ->
             parse_header(T, M#module{prefix = Arg}, Ctx);
         'belongs-to' ->
             {_, Prefix, _, _} = search_one_stmt('prefix', Substmts),
-            parse_header(T, M#module{modulename = Arg, prefix = Prefix}, Ctx);
+%%          %% Create a top-level dummy module and map it in #yctx.modrevs so
+%%          %% that the module can be referred to when we use yanger on
+%%          %% submodule standalone
+%%          ModRev =
+%%            case search_module(Ctx, Pos, 'module', Arg, Revision = undefined, _IncRev = undefined) of
+%%              {true, _Ctx1, TopLvM} ->
+%%                map_insert({Arg, Revision}, TopLvM, Ctx#yctx.modrevs);
+%%              {false, _Ctx1} ->
+%%                Ctx#yctx.modrevs
+%%            end,
+%%          parse_header(T, M#module{modulename = Arg, prefix = Prefix}, Ctx#yctx{modrevs = ModRev});
+
+      parse_header(T, M#module{modulename = Arg, prefix = Prefix}, Ctx);
         'yang-version' ->
             case Arg of
                 <<"1.1">> ->
@@ -5038,19 +5111,18 @@ cursor_move({child, {Mod, Name}}, #cursor{cur = {top, OtherMod}} = C, Ctx)
                         [yang_error:fmt_yang_identifier(Name), Mod])};
 cursor_move({child, {Mod, Name} = Id}, C, Ctx) ->
     %% move down from the top-level
-    if (C#cursor.module)#module.modulename == Mod ->
-            #module{children = Chs} = C#cursor.module;
-       true ->
-            case get_module(Mod, _Revision = undefined, Ctx) of
-                {value, #module{children = Chs}} ->
-                    ok;
-                {value, processing} ->
-                    #module{children = Chs} = C#cursor.module;
-                none ->
-                    Chs = []
-            end
-    end,
-    case find_child(Chs, Id, C#cursor.type, '$undefined', undefined) of
+  Chs = case get_module(Mod, undefined , Ctx) of
+          {value, TopLvM} ->
+            %% Use the children from top-level module so the submodule
+            %% can reference to the definitions from module and submodules
+            %% belonging to the module.
+            TopLvM#module.children ++ C#cursor.module#module.children;
+          none ->
+            %% This happens when yanger is called on submodule standalone,
+            %% however the module which this submodule belongs to is not found
+            C#cursor.module#module.children
+        end,
+  case find_child(Chs, Id, C#cursor.type, '$undefined', undefined) of
         {value, Sn} ->
             {true, C#cursor{cur = Sn, ancestors = [],
                             last_skipped = undefined}};
