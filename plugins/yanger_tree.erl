@@ -123,9 +123,12 @@ emit_tree(Ctx, [Mod|Mods], AllMods, Fd, Depth, Path) ->
                       true ->
                           Acc;
                       false ->
-                          {value, TargetM} =
-                              yang:get_module(RemoteModuleName, undefined, Ctx),
-                          [{TargetM, A} || A <- Augments] ++ Acc
+                        case yang:get_module(RemoteModuleName, undefined, Ctx) of
+                          {value, TargetM} ->
+                            [{TargetM, A} || A <- Augments] ++ Acc;
+                          none ->
+                            Acc
+                        end
                   end
           end, [], Mod#module.remote_augments),
 
