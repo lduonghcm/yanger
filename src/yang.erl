@@ -548,38 +548,21 @@ v_unique_namespaces(#yctx{modrevs = ModRevs} = Ctx) ->
           end, {Ctx, []}, ModRevs),
     Ctx1.
 
-check_include_submodule_revision_date([], _SubMName, _SubMRev) ->
-    undefined;
-check_include_submodule_revision_date([{_, {MFileName, _}} | T ] = _MList, SubMName, SubMRev) ->
-    {ok, [{_,_,_,MStmts}], _} = yang_parser:parse(MFileName, _Canonical = false),
-    IncludeModuleList = search_all_stmts('include', MStmts),
-    [IncludeStmt] = [Stmt||{_,Mod,_,Stmt} <- IncludeModuleList, Mod==SubMName],
-    case search_one_stmt('revision-date', IncludeStmt) of
-        {_, SubMRev, _, _} ->
-            MFileName;
-        {_, _, _, _} ->
-            check_include_submodule_revision_date(T, SubMName, SubMRev);
-        false ->
-            check_include_submodule_revision_date(T, SubMName, SubMRev)
-    end.
-
-get_module_from_submodule(Ctx, MName, SubMName, SubMRev) ->
-  MList =
-    [map_lookup({Mod, Rev}, Ctx#yctx.files) || {Mod, Rev} <- gb_trees:keys(Ctx#yctx.files), Mod==MName],
-  if MList =/= [] ->
-        case check_include_submodule_revision_date(MList, SubMName, SubMRev) of
-            undefined ->
-                {_, {FileName, _}} = map_lookup({MName, undefined}, Ctx#yctx.files),
-                FileName;
-            FileName -> FileName
-        end;
-    true -> undefined
-  end.
-
 add_file0(Ctx, FileName, AddCause) ->
     verbose(?V_NORMAL, Ctx, "Read file ~s\n", [FileName]),
     case yang_parser:parse(FileName, Ctx#yctx.canonical) of
+        %% If yanger is called on submodule, we will build the context based on
+        %% the module it belongs to instead.
         {ok, [{'submodule', SubMName, _SubPos, SubMStmts}] = Stmts, LLErrors} ->
+            %% 1. Retrieve the module name using the 'belongs-to' statement
+            %% 2. Retrieve the submodule's revision.
+            %% 3. Iterate through each revision of module to search if the
+            %% module include the desired submodule's revision.
+            %%    - If we found the module which include the desired submodule's
+            %%      revision, we will use that module to build he context
+            %%    - If we couldn't find the module which include the desired
+            %%      submodule's revision, we will use the module's latest
+            %%      revision to build the context
             {_, MName, _, _} = search_one_stmt('belongs-to', SubMStmts),
             case search_one_stmt('revision', SubMStmts) of
                 {_, SubMRev, _, _} ->
@@ -587,35 +570,30 @@ add_file0(Ctx, FileName, AddCause) ->
                 false ->
                   SubMRev = undefined
             end,
-            MFileName = get_module_from_submodule(Ctx, MName, SubMName, SubMRev ),
+            MFileName = get_module_from_submodule(Ctx, MName, SubMName,SubMRev),
+
             if MFileName == undefined ->
-              add_file1(Ctx, FileName, AddCause, Stmts, LLErrors);
-              true ->
-                case yang_parser:parse(MFileName, Ctx#yctx.canonical) of
-                    %% If couldn't found the module, continue with compiling the submodule
-                    {error, _}  ->
-                        add_file1(Ctx, FileName, AddCause, Stmts, LLErrors);
-                    %% Otherwise, compile the module instead of submodule
-                    {ok, _, _} ->
-                         case add_file0(Ctx, MFileName , AddCause) of
-                           {true, Ctx01, MainModule} ->
-                             %% Only return the module which yanger is called on
-                             %% get submodule
-                             SubModules = MainModule#module.submodules,
-                             [Test] = [M|| {M, _} <- SubModules, M#module.name==SubMName],
-                              {true, Ctx01, Test};
-                           {false, Ctx01, ModRev} ->
-                              {false, Ctx01, ModRev}
-                         end
-
-
-                end
+                add_file1(Ctx, FileName, AddCause, Stmts, LLErrors);
+                true ->
+                    case add_file0(Ctx, MFileName , AddCause) of
+                        {true, Ctx01, MainModule} ->
+                            %% We have already successfully built the Context
+                            %% using main module. But we need to return the
+                            %% record for the submodule called by yanger
+                            SubMs = MainModule#module.submodules,
+                            [SubM] =
+                              [M || {M, _} <- SubMs, M#module.name == SubMName],
+                            {true, Ctx01, SubM};
+                        {false, Ctx01, ModRev} ->
+                            {false, Ctx01, ModRev}
+                    end
             end;
         {ok, Stmts, LLErrors} ->
             add_file1(Ctx, FileName, AddCause, Stmts, LLErrors);
         {error, LLErrors} ->
             {false, add_llerrors(LLErrors, Ctx), undefined}
     end.
+
 add_file1(Ctx, FileName, AddCause, Stmts, LLErrors) ->
     Ctx1 = add_llerrors(LLErrors, Ctx),
     case parse_file_name(FileName) of
@@ -632,6 +610,7 @@ add_file1(Ctx, FileName, AddCause, Stmts, LLErrors) ->
                                  _ExpectFailLevel = warning,
                                  _IncludingModRev = undefined)
     end.
+
 do_verbose(Lvl, #yctx{verbosity = V}) ->
     Lvl =< V.
 
@@ -682,6 +661,39 @@ get_module_from_filename(Iter0, Filename, Ctx) ->
             get_module_from_filename(Iter1, Filename, Ctx);
         none ->
             undefined
+    end.
+
+get_module_from_submodule(Ctx, MName, SubMName, SubMRev) ->
+    get_module_from_submodule(map_iterator(Ctx#yctx.files), Ctx, MName,
+                              SubMName, SubMRev).
+get_module_from_submodule(Iter0, Ctx, MName, SubMName, SubMRev) ->
+    case map_next(Iter0) of
+        {{MName, _}, {MFileName, _}, Iter1} ->
+            {ok, [{_,_,_,MStmts}], _} =
+                yang_parser:parse(MFileName, _Canonical = false),
+            IncludeModuleList = search_all_stmts('include', MStmts),
+            IncludeStmt = lists:keyfind(SubMName,2, IncludeModuleList),
+            case search_one_stmt('revision-date', substmts(IncludeStmt)) of
+                {_, SubMRev, _, _} ->
+                    MFileName;
+                {_, _, _, _} ->
+                    get_module_from_submodule(Iter1, Ctx, MName, SubMName,
+                                              SubMRev);
+                false ->
+                    get_module_from_submodule(Iter1, Ctx, MName, SubMName,
+                                              SubMRev)
+            end;
+
+        {_, _, Iter1} ->
+            get_module_from_submodule(Iter1, Ctx, MName, SubMName, SubMRev);
+
+        none ->
+            case map_lookup({MName, undefined}, Ctx#yctx.files) of
+                {_, {FileName, _}} ->
+                    FileName;
+                none ->
+                    undefined
+            end
     end.
 
 search_module(Ctx, ModuleName, Revision) ->
@@ -884,19 +896,7 @@ parse_header([{Kwd, Arg, _Pos, Substmts} = _H | T] = Stmts, M, Ctx) ->
             parse_header(T, M#module{prefix = Arg}, Ctx);
         'belongs-to' ->
             {_, Prefix, _, _} = search_one_stmt('prefix', Substmts),
-%%          %% Create a top-level dummy module and map it in #yctx.modrevs so
-%%          %% that the module can be referred to when we use yanger on
-%%          %% submodule standalone
-%%          ModRev =
-%%            case search_module(Ctx, Pos, 'module', Arg, Revision = undefined, _IncRev = undefined) of
-%%              {true, _Ctx1, TopLvM} ->
-%%                map_insert({Arg, Revision}, TopLvM, Ctx#yctx.modrevs);
-%%              {false, _Ctx1} ->
-%%                Ctx#yctx.modrevs
-%%            end,
-%%          parse_header(T, M#module{modulename = Arg, prefix = Prefix}, Ctx#yctx{modrevs = ModRev});
-
-      parse_header(T, M#module{modulename = Arg, prefix = Prefix}, Ctx);
+            parse_header(T, M#module{modulename = Arg, prefix = Prefix}, Ctx);
         'yang-version' ->
             case Arg of
                 <<"1.1">> ->
