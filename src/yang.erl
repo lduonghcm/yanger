@@ -1198,17 +1198,8 @@ parse_body(Stmts, M0, Ctx0) ->
                           lists:append(
                             [SM#module.remote_augments ||
                                 {SM, _Pos} <- M5#module.submodules])),
-
-                %% Originally, augments from submodules are not printed on tree
-                %% To print the submodule augments (local augments) the same way
-                %% as augments from imported modules (remote augments), we must
-                %% treat local augments as remote augments
-                RemoteAugments3 =
-                    RemoteAugments2 ++ [{M5#module.modulename, M5#module.local_augments}],
-                {Ctx14, M5#module{remote_augments = RemoteAugments3}}
+                {Ctx14, M5#module{remote_augments = RemoteAugments2}}
          end,
-
-
     %% Update the module in the context before applying remote deviations,
     %% to allow the deviations to reference definitions from this module
     ModRevs = map_update({M6#module.name, M6#module.revision}, M6,
@@ -2466,14 +2457,10 @@ augment_children0([], Sns, _Acc = [], Mode,
     insert_children(Augment#augment.children, Sns, IsFinal, Ancestors,
                     UndefAugNodes, append, Ctx);
 augment_children0([{child, Id} | Ids],
-                  [#sn{name = Name,
-                       children = Children,
-                       kind = Kind} = Sn | Sns],
+                  [#sn{name = Name, children = Children} = Sn | Sns],
                   Acc, Mode, Ancestors, Augment,
                   UndefAugNodes, M, Ctx)
-  %% '__tmp_augment__' node is a tmp #sn{} created previously due to unable to
-  %% find the node yet. We need to look for the real node.
-  when Id == Name, Kind =/= '__tmp_augment__' ->
+  when Id == Name ->
     %% We found a node in the augment path; we must update it
     %% with new children.
     {AugmentedChildren, UndefAugNodes1, Ctx1} =
@@ -2486,18 +2473,7 @@ augment_children0([{child, Id} | Ids],
              true ->
                   Sn1
           end,
-
-    %% Since we found the node, we need to:
-    %% 1. remove the '__tmp_augment__' scheme node from the children list
-    %% 2. remove 'YANG_ERR_NODE_NOT_FOUND' error that was previously reported
-    NewAcc = [SNode || SNode <- Acc, not (SNode#sn.name == Name andalso
-                                          SNode#sn.kind == '__tmp_augment__')],
-    NewErrorList =
-        [Error || #yerror{code = Code, args = Args} = Error <- Ctx1#yctx.errors,
-                  not (Args == [yang_error:fmt_yang_identifier(Id)] andalso
-                       Code == 'YANG_ERR_NODE_NOT_FOUND')],
-    {lists:reverse(NewAcc, [Sn2 | Sns]), UndefAugNodes1,
-        Ctx1#yctx{errors = NewErrorList}};
+    {lists:reverse(Acc, [Sn2 | Sns]), UndefAugNodes1, Ctx1};
 augment_children0(Ids, [Sn | Sns], Acc, Mode, Ancestors, Augment,
                   UndefAugNodes, M, Ctx) ->
     augment_children0(Ids, Sns, [Sn | Acc], Mode, Ancestors, Augment,
