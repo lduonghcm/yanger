@@ -570,7 +570,7 @@ add_file0(Ctx, FileName, AddCause) ->
                 false ->
                   SubMRev = undefined
             end,
-            MFileName = get_module_from_submodule(Ctx, MName, SubMName,SubMRev),
+            MFileName = get_module_from_submodule(Ctx, MName, SubMName, SubMRev),
 
             if MFileName == undefined ->
                 add_file1(Ctx, FileName, AddCause, Stmts, LLErrors);
