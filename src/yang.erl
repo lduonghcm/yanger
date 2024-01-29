@@ -559,10 +559,10 @@ add_file0(Ctx, FileName, AddCause) ->
             %% 3. Iterate through each revision of module to search if the
             %% module include the desired submodule's revision.
             %%    - If we found the module which include the desired submodule's
-            %%      revision, we will use that module to build the context
+            %%      revision or doesn't specify the submodule's revision,
+            %%      we will use that module to build the context
             %%    - If we couldn't find the module which include the desired
-            %%      submodule's revision, we will use the module's latest
-            %%      revision to build the context
+            %%      submodule's revision, we will not compile the module
             {_, MName, _, _} = search_one_stmt('belongs-to', SubMStmts),
             case search_one_stmt('revision', SubMStmts) of
                 {_, SubMRev, _, _} ->
@@ -680,20 +680,14 @@ get_module_from_submodule(Iter0, Ctx, MName, SubMName, SubMRev) ->
                     get_module_from_submodule(Iter1, Ctx, MName, SubMName,
                                               SubMRev);
                 false ->
-                    get_module_from_submodule(Iter1, Ctx, MName, SubMName,
-                                              SubMRev)
+                    MFileName
             end;
 
         {_, _, Iter1} ->
             get_module_from_submodule(Iter1, Ctx, MName, SubMName, SubMRev);
 
         none ->
-            case map_lookup({MName, undefined}, Ctx#yctx.files) of
-                {_, {FileName, _}} ->
-                    FileName;
-                none ->
-                    undefined
-            end
+            undefined
     end.
 
 search_module(Ctx, ModuleName, Revision) ->
@@ -5111,18 +5105,18 @@ cursor_move({child, {Mod, Name}}, #cursor{cur = {top, OtherMod}} = C, Ctx)
                         [yang_error:fmt_yang_identifier(Name), Mod])};
 cursor_move({child, {Mod, Name} = Id}, C, Ctx) ->
     %% move down from the top-level
-  Chs = case get_module(Mod, undefined , Ctx) of
+    Chs = case get_module(Mod, undefined , Ctx) of
           {value, TopLvM} ->
             %% Use the children from top-level module so the submodule
             %% can reference to the definitions from module and submodules
             %% belonging to the module.
-            TopLvM#module.children ++ C#cursor.module#module.children;
+            TopLvM#module.children;
           none ->
             %% This happens when yanger is called on submodule standalone,
             %% however the module which this submodule belongs to is not found
             C#cursor.module#module.children
         end,
-  case find_child(Chs, Id, C#cursor.type, '$undefined', undefined) of
+    case find_child(Chs, Id, C#cursor.type, '$undefined', undefined) of
         {value, Sn} ->
             {true, C#cursor{cur = Sn, ancestors = [],
                             last_skipped = undefined}};
