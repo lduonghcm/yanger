@@ -1,6 +1,7 @@
 [doc text example:structure]
 
 [shell yanger]
+    !cd ./path-referencing
     !yanger -f tree example.yang
     """???
     module: example

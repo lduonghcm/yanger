@@ -1,0 +1,29 @@
+submodule mod3-sub2 {
+  belongs-to mod3 {
+    prefix m3;
+  }
+
+  import mod1 {
+    prefix m1;
+  }
+
+  import mod2 {
+    prefix m2;
+  }
+
+  augment "/m1:mod1-con/m2:mod2-con1" {
+    container mod3-sub2-con1 {
+      leaf mod3-sub2-leaf1 {
+        type string;
+      }
+    }
+  }
+
+  // leafref referring to a leaf defined in an another submodule
+  // of the difference main module.
+  leaf mod3-sub2-leaf2 {
+    type leafref {
+      path "/m2:mod2-sub-leaf1";
+    }
+  }
+}
