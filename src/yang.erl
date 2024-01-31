@@ -551,24 +551,75 @@ v_unique_namespaces(#yctx{modrevs = ModRevs} = Ctx) ->
 add_file0(Ctx, FileName, AddCause) ->
     verbose(?V_NORMAL, Ctx, "Read file ~s\n", [FileName]),
     case yang_parser:parse(FileName, Ctx#yctx.canonical) of
-        {ok, Stmts, LLErrors} ->
-            Ctx1 = add_llerrors(LLErrors, Ctx),
-            case parse_file_name(FileName) of
-                {ok, FileModuleName, FileRevision} ->
-                    add_parsed_stmt_tree(Ctx1, Stmts, FileName,
-                                         AddCause,
-                                         FileModuleName, FileRevision,
-                                         _ExpectFailLevel = warning,
-                                         _IncludingModRev = undefined);
+        %% If yanger is called on submodule, we will build the context based on
+        %% the module it belongs to instead.
+        {ok, [{'submodule', SubMName, _SubPos, SubMStmts}] = Stmts, LLErrors} ->
+            %% 1. Retrieve the module name using the 'belongs-to' statement
+            %% 2. Retrieve the submodule's revision.
+            %% 3. Iterate through each revision of module to search if the
+            %% module include the desired submodule's revision.
+            %%    - If we found the module which include the desired submodule's
+            %%      revision or doesn't specify the submodule's revision,
+            %%      we will use that module to build the context
+            %%    - If we couldn't find the module which include the desired
+            %%      submodule's revision, we will not compile the module
+            {_, MName, _, _} = search_one_stmt('belongs-to', SubMStmts),
+            case search_one_stmt('revision', SubMStmts) of
+                {_, SubMRev, _, _} ->
+                    ok;
+                false ->
+                  SubMRev = undefined
+            end,
+            MFileName = get_module_from_submodule(Ctx, MName, SubMName, SubMRev),
+            case MFileName of
+                %% We couldn't find the module which include submodule with
+                %% desired revision-date
+                undefined ->
+                    add_file1(Ctx, FileName, AddCause, Stmts, LLErrors);
+
+                %% This case is when module doesn't include the submodule,
+                %% at the moment, we simply ignore it and just compile the
+                %% submodule normally since yanger is being called on submodule
                 error ->
-                    add_parsed_stmt_tree(Ctx1, Stmts, FileName,
-                                                 AddCause,
-                                         undefined, undefined,
-                                         _ExpectFailLevel = warning,
-                                         _IncludingModRev = undefined)
+                    add_file1(Ctx, FileName, AddCause, Stmts, LLErrors);
+
+                %% We found the module which include the submodule with the
+                %% desired revision-date
+                MFileName ->
+                    case add_file0(Ctx, MFileName , AddCause) of
+                        {true, Ctx01, MainModule} ->
+                            %% We have already successfully built the Context
+                            %% using main module. But we need to return the
+                            %% record for the submodule called by yanger
+                            SubMs = MainModule#module.submodules,
+                            [SubM] =
+                              [M || {M, _} <- SubMs, M#module.name == SubMName],
+                            {true, Ctx01, SubM};
+                        {false, Ctx01, ModRev} ->
+                            {false, Ctx01, ModRev}
+                    end
             end;
+        {ok, Stmts, LLErrors} ->
+            add_file1(Ctx, FileName, AddCause, Stmts, LLErrors);
         {error, LLErrors} ->
             {false, add_llerrors(LLErrors, Ctx), undefined}
+    end.
+
+add_file1(Ctx, FileName, AddCause, Stmts, LLErrors) ->
+    Ctx1 = add_llerrors(LLErrors, Ctx),
+    case parse_file_name(FileName) of
+        {ok, FileModuleName, FileRevision} ->
+            add_parsed_stmt_tree(Ctx1, Stmts, FileName,
+                                 AddCause,
+                                 FileModuleName, FileRevision,
+                                 _ExpectFailLevel = warning,
+                                 _IncludingModRev = undefined);
+        error ->
+            add_parsed_stmt_tree(Ctx1, Stmts, FileName,
+                                 AddCause,
+                                 undefined, undefined,
+                                 _ExpectFailLevel = warning,
+                                 _IncludingModRev = undefined)
     end.
 
 do_verbose(Lvl, #yctx{verbosity = V}) ->
@@ -619,6 +670,40 @@ get_module_from_filename(Iter0, Filename, Ctx) ->
             M;
         {{_ModuleName, _Revision}, _M, Iter1} ->
             get_module_from_filename(Iter1, Filename, Ctx);
+        none ->
+            undefined
+    end.
+
+get_module_from_submodule(Ctx, MName, SubMName, SubMRev) ->
+    get_module_from_submodule(map_iterator(Ctx#yctx.files), Ctx, MName,
+                              SubMName, SubMRev).
+get_module_from_submodule(Iter0, Ctx, MName, SubMName, SubMRev) ->
+    case map_next(Iter0) of
+        {{MName, _}, {MFileName, _}, Iter1} ->
+            {ok, [{_,_,_,MStmts}], _} =
+                yang_parser:parse(MFileName, _Canonical = false),
+            IncludeModuleList = search_all_stmts('include', MStmts),
+            IncludeStmt = lists:keyfind(SubMName,2, IncludeModuleList),
+            case IncludeStmt of
+                %% This is an error, the main module doesn't include the
+                %% submodule. We simply return error
+                false ->
+                    error;
+                IncludeStmt ->
+                    case search_one_stmt('revision-date', substmts(IncludeStmt)) of
+                        {_, SubMRev, _, _} ->
+                            MFileName;
+                        {_, _, _, _} ->
+                            get_module_from_submodule(Iter1, Ctx, MName, SubMName,
+                                SubMRev);
+                        false ->
+                            MFileName
+                    end
+            end;
+
+        {_, _, Iter1} ->
+            get_module_from_submodule(Iter1, Ctx, MName, SubMName, SubMRev);
+
         none ->
             undefined
     end.
@@ -2247,10 +2332,34 @@ mk_children([{Kwd, Arg, Pos, Substmts} = Stmt | T], GroupingMap0,
                     {Ctx7, Sn5} =
                         run_mk_sn_hooks(Ctx6, Sn4, #hooks.post_mk_sn, Mode,
                                         undefined, Ancestors),
-                    mk_children(T, GroupingMap1, Typedefs, Groupings,
+
+                    %% A __tmp_augment__ #sn may have been created previously
+                    %% by the submodule. Check if the node exist in the module.
+                    %% If the node exist, replace the tmp node
+                    case lists:keyfind(Sn5#sn.name, #sn.name, Acc) of
+                        #sn{kind = '__tmp_augment__'} = TmpSn ->
+                            %% We found the tmp node to replace
+                            Sn6 = Sn5#sn{augmented_by = Sn5#sn.augmented_by ++
+                                                        TmpSn#sn.augmented_by,
+                                         children = Sn5#sn.children ++
+                                                    TmpSn#sn.children},
+                            %% Remove reported error
+                            Ctx8 = Ctx7#yctx{ errors = [Error ||
+                                #yerror{code = Code, args = Args} = Error <- Ctx7#yctx.errors,
+                                    not (Args == [yang_error:fmt_yang_identifier(Sn6#sn.name)] andalso
+                                         Code == 'YANG_ERR_NODE_NOT_FOUND')]},
+                            %% Replace the tmp node
+                            Acc2 = lists:keydelete(Sn5#sn.name, #sn.name, Acc),
+                            mk_children(T, GroupingMap1, Typedefs, Groupings,
+                                ParentTypedefs, ParentGroupings,
+                                M, IsInGrouping, Ctx8,
+                                Mode, Ancestors, [Sn6 | Acc2], XAcc);
+                        _Else ->
+                            mk_children(T, GroupingMap1, Typedefs, Groupings,
                                 ParentTypedefs, ParentGroupings,
                                 M, IsInGrouping, Ctx7,
                                 Mode, Ancestors, [Sn5 | Acc], XAcc)
+                    end
             end;
         _ ->
             %% ignore other statements
@@ -5038,18 +5147,17 @@ cursor_move({child, {Mod, Name}}, #cursor{cur = {top, OtherMod}} = C, Ctx)
                         [yang_error:fmt_yang_identifier(Name), Mod])};
 cursor_move({child, {Mod, Name} = Id}, C, Ctx) ->
     %% move down from the top-level
-    if (C#cursor.module)#module.modulename == Mod ->
-            #module{children = Chs} = C#cursor.module;
-       true ->
-            case get_module(Mod, _Revision = undefined, Ctx) of
-                {value, #module{children = Chs}} ->
-                    ok;
-                {value, processing} ->
-                    #module{children = Chs} = C#cursor.module;
-                none ->
-                    Chs = []
-            end
-    end,
+    Chs = case get_module(Mod, undefined , Ctx) of
+          {value, TopLvM} ->
+            %% Use the children from top-level module so the submodule
+            %% can reference to the definitions from module and submodules
+            %% belonging to the module.
+            TopLvM#module.children;
+          none ->
+            %% This happens when yanger is called on submodule standalone,
+            %% however the module which this submodule belongs to is not found
+            C#cursor.module#module.children
+        end,
     case find_child(Chs, Id, C#cursor.type, '$undefined', undefined) of
         {value, Sn} ->
             {true, C#cursor{cur = Sn, ancestors = [],

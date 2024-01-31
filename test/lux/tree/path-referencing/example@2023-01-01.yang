@@ -1,0 +1,15 @@
+module example {
+  namespace "http://tail-f.com/test";
+  prefix "test";
+
+  include example-sub;
+  include example-sub3 {
+    revision-date 2022-12-12;
+  }
+  revision 2023-01-01;
+
+  leaf nleaf {
+    type boolean;
+  }
+
+}

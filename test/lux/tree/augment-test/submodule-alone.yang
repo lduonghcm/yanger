@@ -1,0 +1,18 @@
+submodule submodule-alone {
+  belongs-to non-existent-module {
+    prefix nem;
+  }
+  leaf alex {
+    type string;
+  }
+  leaf bob {
+    type leafref {
+      path "../alex";
+    }
+  }
+  leaf carol {
+    type leafref {
+      path "/nem:alex";
+    }
+  }
+}

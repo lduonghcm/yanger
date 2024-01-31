@@ -1,0 +1,6 @@
+module mod1 {
+  namespace "http://hkt.com/ns/yang/mod1";
+  prefix m1;
+
+  container mod1-con;
+}

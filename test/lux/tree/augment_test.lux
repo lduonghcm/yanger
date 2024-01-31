@@ -1,0 +1,81 @@
+[doc text example:structure]
+
+[shell yanger]
+    !cd ./augment-test
+    !yanger -f tree mod1.yang
+    """???
+    module: mod1
+      +--rw mod1-con
+    SH-PROMPT
+    """
+
+    !yanger -f tree mod2.yang
+    """???
+    module: mod2
+      +--rw mod2-sub-leaf1?   -> /m1:mod1-con/mod2-con2/mod2-leaf1
+      +--rw mod2-con3
+         +--rw mod2-leaf2?       string
+         +---- mod2-sub-leaf2?   string
+
+      augment /m1:mod1-con:
+        +--rw mod2-con1
+      augment /m1:mod1-con:
+        +--rw mod2-con2
+           +--rw mod2-leaf1?   string
+    SH-PROMPT
+    """
+
+    !yanger -f tree mod2-sub.yang
+    """???
+    submodule: mod2-sub (belongs-to mod2)
+      +--rw mod2-sub-leaf1?   -> /m1:mod1-con/mod2-con2/mod2-leaf1
+    SH-PROMPT
+    """
+
+    !yanger -f tree mod3.yang
+    """???
+    module: mod3
+      +--rw mod3-sub1-leaf1?   -> /m1:mod1-con/m2:mod2-con1/mod3-g-con/mod3-g-leaf
+      +--rw mod3-sub1-leaf2?   -> /m1:mod1-con/m2:mod2-con1/mod3-sub2-con1/mod3-sub2-leaf1
+      +--rw mod3-sub1-leaf3?   -> /mod3-sub2-leaf2
+      +--rw mod3-sub2-leaf2?   -> /m2:mod2-sub-leaf1
+
+      augment /m1:mod1-con/m2:mod2-con1:
+        +--rw mod3-sub2-con1
+           +--rw mod3-sub2-leaf1?   string
+      augment /m1:mod1-con/m2:mod2-con1:
+        +--rw mod3-g-con
+           +--rw mod3-g-leaf?   string
+    SH-PROMPT
+    """
+
+    !yanger -f tree mod3-sub1.yang
+    """???
+    submodule: mod3-sub1 (belongs-to mod3)
+      +--rw mod3-sub1-leaf1?   -> /m1:mod1-con/m2:mod2-con1/mod3-g-con/mod3-g-leaf
+      +--rw mod3-sub1-leaf2?   -> /m1:mod1-con/m2:mod2-con1/mod3-sub2-con1/mod3-sub2-leaf1
+      +--rw mod3-sub1-leaf3?   -> /mod3-sub2-leaf2
+    SH-PROMPT
+    """
+
+    !yanger -f tree mod3-sub2.yang
+    """???
+    submodule: mod3-sub2 (belongs-to mod3)
+      +--rw mod3-sub2-leaf2?   -> /m2:mod2-sub-leaf1
+
+      augment /m1:mod1-con/m2:mod2-con1:
+        +--rw mod3-sub2-con1
+           +--rw mod3-sub2-leaf1?   string
+    SH-PROMPT
+    """
+
+    !yanger -f tree submodule-alone.yang
+    """???
+    submodule: submodule-alone (belongs-to non-existent-module)
+      +--rw alex?    string
+      +--rw bob?     -> ../alex
+      +--rw carol?   -> /alex
+    SH-PROMPT
+    """
+
+

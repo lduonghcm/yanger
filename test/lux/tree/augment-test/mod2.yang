@@ -1,0 +1,28 @@
+module mod2 {
+  namespace "http://hkt.com/ns/yang/mod2";
+  prefix m2;
+
+  include mod2-sub;
+
+  import mod1 {
+    prefix m1;
+  }
+
+  augment "/m1:mod1-con" {
+    container mod2-con1;
+  }
+
+  augment "/m1:mod1-con" {
+    container mod2-con2 {
+      leaf mod2-leaf1 {
+        type string;
+      }
+    }
+  }
+
+  container mod2-con3 {
+    leaf mod2-leaf2 {
+      type string;
+    }
+  }
+}

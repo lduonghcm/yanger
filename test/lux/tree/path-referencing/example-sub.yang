@@ -1,0 +1,19 @@
+submodule example-sub {
+  belongs-to example {
+    prefix example;
+  }
+  revision 2024-01-01;
+  leaf alex {
+    type string;
+  }
+  leaf john {
+    type leafref {
+      path "../alex";
+    }
+  }
+  leaf foo {
+    type leafref {
+      path "/example:nleaf";
+    }
+  }
+}

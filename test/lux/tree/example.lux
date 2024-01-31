@@ -1,0 +1,46 @@
+[doc text example:structure]
+
+[shell yanger]
+    !cd ./path-referencing
+    !yanger -f tree example.yang
+    """???
+    module: example
+      +--rw alex?    string
+      +--rw john?    -> ../alex
+      +--rw foo?     -> /example:nleaf
+      +--rw three?   string
+      +--rw nleaf?   boolean
+    SH-PROMPT
+    """
+
+    !yanger -f tree example-sub.yang
+    """???
+    submodule: example-sub (belongs-to example)
+      +--rw alex?   string
+      +--rw john?   -> ../alex
+      +--rw foo?    -> /nleaf
+    SH-PROMPT
+    """
+
+    !yanger -f tree example-sub2.yang
+    """???
+    submodule: example-sub2 (belongs-to example2)
+      +--rw alex?   string
+      +--rw bob?    -> ../alex
+      +--rw two?    -> /alex
+    SH-PROMPT
+    """
+
+    !yanger -f tree example-sub3@2022-12-12.yang
+    """???
+    submodule: example-sub3 (belongs-to example)
+      +--rw threeold?   string
+    SH-PROMPT
+    """
+
+    !yanger -f tree example-sub3@2024-01-01.yang
+    """???
+    submodule: example-sub3 (belongs-to example)
+      +--rw three?   string
+    SH-PROMPT
+    """
