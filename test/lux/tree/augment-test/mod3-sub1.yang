@@ -1,0 +1,36 @@
+submodule mod3-sub1 {
+  belongs-to mod3 {
+    prefix m3;
+  }
+
+  import mod1 {
+    prefix m1;
+  }
+
+  import mod2 {
+    prefix m2;
+  }
+
+  // leafref referring to a leaf defined in augment statement of the main module
+  leaf mod3-sub1-leaf1 {
+    type leafref {
+      path "/m1:mod1-con/m2:mod2-con1/mod3-g-con/mod3-g-leaf";
+    }
+  }
+
+  // leafref referring to a leaf defined in an augment statement of another
+  // submodule of the same main module.
+  leaf mod3-sub1-leaf2 {
+    type leafref {
+      path "/m1:mod1-con/m2:mod2-con1/mod3-sub2-con1/mod3-sub2-leaf1";
+    }
+  }
+
+  // leafref referring to a leaf defined in an another submodule
+  // of the same main module.
+  leaf mod3-sub1-leaf3 {
+    type leafref {
+      path "/mod3-sub2-leaf2";
+    }
+  }
+}

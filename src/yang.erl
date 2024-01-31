@@ -571,10 +571,21 @@ add_file0(Ctx, FileName, AddCause) ->
                   SubMRev = undefined
             end,
             MFileName = get_module_from_submodule(Ctx, MName, SubMName, SubMRev),
+            case MFileName of
+                %% We couldn't find the module which include submodule with
+                %% desired revision-date
+                undefined ->
+                    add_file1(Ctx, FileName, AddCause, Stmts, LLErrors);
 
-            if MFileName == undefined ->
-                add_file1(Ctx, FileName, AddCause, Stmts, LLErrors);
-                true ->
+                %% This case is when module doesn't include the submodule,
+                %% at the moment, we simply ignore it and just compile the
+                %% submodule normally since yanger is being called on submodule
+                error ->
+                    add_file1(Ctx, FileName, AddCause, Stmts, LLErrors);
+
+                %% We found the module which include the submodule with the
+                %% desired revision-date
+                MFileName ->
                     case add_file0(Ctx, MFileName , AddCause) of
                         {true, Ctx01, MainModule} ->
                             %% We have already successfully built the Context
@@ -673,14 +684,21 @@ get_module_from_submodule(Iter0, Ctx, MName, SubMName, SubMRev) ->
                 yang_parser:parse(MFileName, _Canonical = false),
             IncludeModuleList = search_all_stmts('include', MStmts),
             IncludeStmt = lists:keyfind(SubMName,2, IncludeModuleList),
-            case search_one_stmt('revision-date', substmts(IncludeStmt)) of
-                {_, SubMRev, _, _} ->
-                    MFileName;
-                {_, _, _, _} ->
-                    get_module_from_submodule(Iter1, Ctx, MName, SubMName,
-                                              SubMRev);
+            case IncludeStmt of
+                %% This is an error, the main module doesn't include the
+                %% submodule. We simply return error
                 false ->
-                    MFileName
+                    error;
+                IncludeStmt ->
+                    case search_one_stmt('revision-date', substmts(IncludeStmt)) of
+                        {_, SubMRev, _, _} ->
+                            MFileName;
+                        {_, _, _, _} ->
+                            get_module_from_submodule(Iter1, Ctx, MName, SubMName,
+                                SubMRev);
+                        false ->
+                            MFileName
+                    end
             end;
 
         {_, _, Iter1} ->
@@ -2314,10 +2332,34 @@ mk_children([{Kwd, Arg, Pos, Substmts} = Stmt | T], GroupingMap0,
                     {Ctx7, Sn5} =
                         run_mk_sn_hooks(Ctx6, Sn4, #hooks.post_mk_sn, Mode,
                                         undefined, Ancestors),
-                    mk_children(T, GroupingMap1, Typedefs, Groupings,
+
+                    %% A __tmp_augment__ #sn may have been created previously
+                    %% by the submodule. Check if the node exist in the module.
+                    %% If the node exist, replace the tmp node
+                    case lists:keyfind(Sn5#sn.name, #sn.name, Acc) of
+                        #sn{kind = '__tmp_augment__'} = TmpSn ->
+                            %% We found the tmp node to replace
+                            Sn6 = Sn5#sn{augmented_by = Sn5#sn.augmented_by ++
+                                                        TmpSn#sn.augmented_by,
+                                         children = Sn5#sn.children ++
+                                                    TmpSn#sn.children},
+                            %% Remove reported error
+                            Ctx8 = Ctx7#yctx{ errors = [Error ||
+                                #yerror{code = Code, args = Args} = Error <- Ctx7#yctx.errors,
+                                    not (Args == [yang_error:fmt_yang_identifier(Sn6#sn.name)] andalso
+                                         Code == 'YANG_ERR_NODE_NOT_FOUND')]},
+                            %% Replace the tmp node
+                            Acc2 = lists:keydelete(Sn5#sn.name, #sn.name, Acc),
+                            mk_children(T, GroupingMap1, Typedefs, Groupings,
+                                ParentTypedefs, ParentGroupings,
+                                M, IsInGrouping, Ctx8,
+                                Mode, Ancestors, [Sn6 | Acc2], XAcc);
+                        _Else ->
+                            mk_children(T, GroupingMap1, Typedefs, Groupings,
                                 ParentTypedefs, ParentGroupings,
                                 M, IsInGrouping, Ctx7,
                                 Mode, Ancestors, [Sn5 | Acc], XAcc)
+                    end
             end;
         _ ->
             %% ignore other statements
